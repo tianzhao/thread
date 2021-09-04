@@ -139,7 +139,7 @@ class AsyncM {
 	static throw = e => new AsyncM( p => Promise.reject(e) )
 
 	// liftIO :: ((a -> IO ()) -> IO ()) -> AsyncM a
-        static liftIO = cont => new AsyncM (p => new Promise((k, r) => {
+	static liftIO = cont => new AsyncM (p => new Promise((k, r) => {
 		let c1 = _ => r("interrupted"); 
 		if (p.isAlive()) { 
 			p.addCanceller(c1);
