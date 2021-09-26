@@ -1,3 +1,4 @@
+
 /*
  *  1. utility 
  */
@@ -37,7 +38,8 @@ class Progress {
 	cancel () { 
 		if (! this.cancelled) { 
 			this.cancelled = true; 
-			this.cancellers.forEach(c => setTimeout(c, 0)); 
+			// TODO: The thread cancellation is blocking like what Haskell does now
+			this.cancellers.forEach(c => c()); // setTimeout(c, 0)); 
 			this.children.forEach(c => c.cancel());
 
 			this.cancellers = [];
@@ -87,9 +89,9 @@ class AsyncM {
 
 	block = _ => new AsyncM(_ => this.run(new Progress()))
 
-	start = (p = new Progress()) => { AsyncM.timeout(0).bind(_=>this).run_(p); return p; } 
+	start = (p = new Progress()) => { AsyncM.timeout(0).bind(_=>this)._run(p); return p; } 
 
-	run_ = p => this.run(p).catch(e => { if (e != "interrupted") throw e; else console.log(e); }); 
+	_run = p => this.run(p).catch(e => { if (e != "interrupted") throw e; else console.log(e); }); 
 
 	// catch exception in 'this' with handler 'h'
 	// AsyncM a -> (e -> a) -> AsyncM a
@@ -109,7 +111,7 @@ class AsyncM {
 
 	// return an AsyncM of AsyncM to wait for the result of 'this'
 	// AsyncM a -> _ -> AsyncM (AsyncM a)
-	spawn = _ => new AsyncM (async p => new AsyncM(_ => this.run_(p)));
+	spawn = _ => new AsyncM (async p => new AsyncM(_ => this._run(p)));
 
 
 	// fork 'this' as a thread and return its progress 
@@ -117,7 +119,7 @@ class AsyncM {
 			const p1 = new Progress(p);
 			AsyncM.timeout(0)
 				.bind(_=>this)
-				.run_(p1)
+				._run(p1)
 				.finally(_ => p1.unlink()); // unlink parent to child reference after completion
 			return p1; 
 		    })
@@ -128,7 +130,7 @@ class AsyncM {
 				const p1 = new Progress(p);
 				AsyncM.timeout(0)
 					.bind(_=>m)
-					.run_(p1)
+					._run(p1)
 					.finally(_ => p1.unlink());
 				return p1;
 			}))
@@ -138,29 +140,68 @@ class AsyncM {
 
 	static throw = e => new AsyncM( p => Promise.reject(e) )
 
-	// liftIO :: ((a -> IO ()) -> IO ()) -> AsyncM a
-	static liftIO = cont => new AsyncM (p => new Promise((k, r) => {
-		let c1 = _ => r("interrupted"); 
+	/*
+	// lift :: ((a -> ()) -> ()) -> AsyncM a
+        static lift = f => new AsyncM (p => new Promise((k, r) => {
+		let c = _ => r("interrupted"); 
 		if (p.isAlive()) { 
-			p.addCanceller(c1);
+			p.addCanceller(c);
 
 			let k1 = x => {
-				p.removeCanceller(c1)	
+				p.removeCanceller(c)	
 				if (!p.isPaused(_ => k(x))) k(x); 
 			}
-			cont(k1)
+			f(k1)
 		}
-		else c1();
+		else c();
+	}))
+	*/
+
+	// f :: (a -> (), e -> ()) -> ()
+	// h :: (a -> ()) -> ()
+	// lift :: (f, h) -> AsyncM a
+	static lift = (f, h) => new AsyncM (p => new Promise((k, r) => {
+		// run 'f' only if 'p' is alive
+		if (p.isAlive()) { 
+			let c = _ => { 
+				if (h) h(k1) 
+				r('interrupted') 
+			} 
+			let k1 = x => {
+				p.removeCanceller(c)	
+				if (!p.isPaused(_ => k(x))) k(x) 
+			}
+			let r1 = x => {
+				p.removeCanceller(c)	
+				r(x)
+			}
+
+			p.addCanceller(c);
+			f(k1, r1)
+		}
+		else r('interrupted')
 	}))
 
-	// liftIO :: Promise a -> AsyncM a
-        static liftIO_ = promise => AsyncM.liftIO(k => promise.then(k))
+
+	// lift :: Promise a -> AsyncM a
+        static _lift = promise => AsyncM.lift(k => promise.then(k))
 
 	// an AsyncM that never completes 
 	static never = new AsyncM (p => new Promise(_ => {}))
 
 	// completes after 'n' millisecond timeout
-	static timeout = n => AsyncM.liftIO(k => setTimeout(k, n))
+	static timeout = n => {
+		let timer
+		let f = k => { timer = setTimeout(k, n) }
+		let h = _ => { if (timer) clearTimeout(timer) }
+		return AsyncM.lift(f, h)
+	}
+
+	static from = (elem, evt) => {
+		elem = $(elem)
+		return AsyncM.lift(k => elem.one(evt, k), 
+				     k => elem.off(evt, k)) 
+	}
 
 	// cancel the current progress
 	static cancel = new AsyncM (p => new Promise(k => { p.cancel(); k() }));
@@ -181,27 +222,39 @@ class AsyncM {
 	// race two AsyncM and the winner is the one completes or throws exception first.
 	static race = lst => new AsyncM (p => {
 		let p1 = new Progress(p);
-		return Promise.race(lst.map(m => m.run_(p1)))
+		return Promise.race(lst.map(m => m._run(p1)))
 			.finally(_ => { p1.cancel(); p1.unlink(); }); 
 	});
 
 	// race two AsyncM and the winner is the one completes first.
 	static any = lst => new AsyncM (p => {
 		let p1 = new Progress(p);
-		return Promise.any(lst.map(m => m.run_(p1)))
+		return Promise.any(lst.map(m => m._run(p1)))
 			.finally(_ => { p1.cancel(); p1.unlink(); }); 
 	});
 
 	// run two AsyncM and wait for both of their results
 	static all = lst => new AsyncM (p => Promise.all(lst.map(m => m.run(p))));
 
+	/*
+ 	 * for testing purpose -- run 'f' for 'n' times at 'dt' interval
+ 	 */
+	static interval = (n, dt, f) => {
+		const h = i => AsyncM.ifAlive.bind(_ => new AsyncM(async p => {
+			if (i <= n) {
+				AsyncM.timeout(dt)
+				.bind(_ => AsyncM.lift(k => k(f(i))).bind(_ => h(i+1)))
+				.run(p);
+		}}));
+		return h(1);
+	}
 }
 
 
 /*
- *  4. MVar
+ *  4. MVar and Channel
  */
-
+ 
 class MVar {
 	constructor() {
 		this.value = undefined;
@@ -288,132 +341,7 @@ class MVar {
 		else k(this.value)  
 	}))
 }
-
-
-/*
- *  5. Channels
- */
-
-// unbounded buffer, not cancellable
-class Channel {
-	constructor() {
-		this.data = [];			// data buffer
-		this.listeners = [];		// reader queue
-	}
-
-	// read :: (a -> IO()) -> IO()
-	read = k => {
-		const d = this.data;
-		if(d.length > 0) { 
-			k(d.shift()); 		// read one data
-		} else { 
-			this.listeners.push(k); // add reader to the queue
-		}
-	};
-
-	// write :: a -> IO()
-	write = x => {
-		const l = this.listeners;
-		if(l.length > 0) {
-			const k = l.shift(); 	// wake up one reader in FIFO order
-			k(x);
-		}
-		else {
-			this.data.push(x); 	// buffer if no reader in the queue
-		}
-	}
-
-	readAsync = new AsyncM(p => new Promise(this.read))
-	writeAsync = x => new AsyncM(p => new Promise(k => { this.write(x); k() })) 
-}
-
-// bounded channel with circular buffer
-// there will be either 
-// 	pending readers (buffer empty) or 
-// 	pending writers (buffer full) 
-// 	but not both
-class BChannel {
-	constructor(size) {
-		if (!size || size < 1) size = 1; // minimum size is 1
-
-		this.data = [];   this.readers = [];  this.writers = []
-		this.size = size; this.readIndex = 0; this.writeIndex = 0; this.n = 0
-	}
-
-	isEmpty = _ => this.n <= 0
-	isFull = _ => this.n >= this.size
-
-	// read :: (a -> IO()) -> IO()
-	read = k => {
-		// if buffer is empty, then push this reader into the pending readers list
-		if (this.isEmpty()) this.readers.push(_ => this._read(x => setTimeout(_=>k(x), 0)))
-		else this._read(k) 
-	}
-
-	_read = k => {
-		let d = this.data[this.readIndex]
-		this.readIndex = (this.readIndex + 1) % this.size
-		this.n = this.n - 1
-
-		// if there are pending writers, then run the first one
-		if (this.writers.length > 0) { this.writers.shift()(); }
-
-		k(d) // return the data
-	}
-
-	// write :: a -> (() -> IO()) -> IO ()
-	write = x => (k => {
-		// if channel is full, then push this writer into the pending writers list
-		if (this.isFull()) this.writers.push(_ => this._write(x)(_ => setTimeout(_=>k(unit), 0)))
-		else this._write(x)(k)
-	});
-
-	_write = x => k => {
-		this.data[this.writeIndex] = x // write data
-		this.writeIndex = (this.writeIndex + 1) % this.size
-		this.n = this.n + 1
-
-		// if there are pending readers, then run the first one
-		if (this.readers.length > 0) { this.readers.shift()() }
-
-		k() // return
-	}
-
-	readAsync = new AsyncM(p => new Promise((k, r) => {
-		// if buffer is empty, then push this reader into the pending readers list
-		if (this.isEmpty()) {
-			let k1 = _ => { 
-				p.removeCanceller(c1)
-				this._read(x => setTimeout(_=>k(x), 0)) 
-			}
-			let c1 = _ => {
-				this.readers = this.readers.filter(reader => reader != k1)
-				r("interrupted")
-			}
-			p.addCanceller(c1)
-			this.readers.push(k1)
-		}
-		else this._read(k) 
-	}))
-
-	writeAsync = x => new AsyncM(p => new Promise((k, r) => {
-		// if channel is full, then push this writer into the pending writers list
-		if (this.isFull()) { 
-			let k1 = _ => {
-				p.removeCanceller(c1)
-				this._write(x)(_ => setTimeout(_=>k(unit), 0)) 
-			}
-			let c1 = _ => {
-				this.writers = this.writers.filter(writer => writer != k1)
-				r("interrupted")
-			}
-			p.addCanceller(c1)
-			this.writers.push(k1)
-		}
-		else this._write(x)(k)
-	}))
-}
-
+ 
 // MVar-based bounded channel
 class MChannel {
 	constructor(size) { 
@@ -455,6 +383,6 @@ class MChannel {
 			this.n = this.n + 1;
 			this.data.push(x);
 		}
-		return
 	})
 }
+ 
