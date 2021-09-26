@@ -257,7 +257,7 @@ class AsyncM {
  
 class MVar {
 	constructor() {
-		this.value = undefined;
+		this.value = unit;
 		this.isEmpty = true;
 		this.readers = []; // pending readers
 		this.pending = []; // pending putters or takers 
