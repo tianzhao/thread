@@ -324,7 +324,7 @@ class MVar {
 	} 
 
 	// AsyncM a
-	readAsync = new AsyncM(p => new Promise((k, r) => { 
+	read = new AsyncM(p => new Promise((k, r) => { 
 		if (this.isEmpty) { 
 			let k1 = _ => {
 				p.removeCanceller(c1)	
@@ -354,7 +354,7 @@ class MChannel {
 	isEmpty = _ => this.n <= 0
 	isFull = _ => this.n >= this.size
 
-	readAsync = new AsyncM(async p => {
+	read = new AsyncM(async p => {
 		let ret
 
 		if (this.isEmpty()) {
@@ -374,7 +374,7 @@ class MChannel {
 		return ret;
 	})
 
-	writeAsync = x => new AsyncM(async p => {
+	write = x => new AsyncM(async p => {
 		if (this.isFull() || 
 			this.m.pending.length > 0) {  // has pending readers
 			await this.m.put(x).run(p)
