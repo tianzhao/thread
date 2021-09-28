@@ -239,15 +239,13 @@ class AsyncM {
 	/*
  	 * for testing purpose -- run 'f' for 'n' times at 'dt' interval
  	 */
-	static interval = (n, dt, f) => {
-		const h = i => AsyncM.ifAlive.bind(_ => new AsyncM(async p => {
-			if (i <= n) {
-				AsyncM.timeout(dt)
-				.bind(_ => AsyncM.lift(k => k(f(i))).bind(_ => h(i+1)))
-				.run(p);
-		}}));
-		return h(1);
-	}
+	static interval = (n, dt, f) => new AsyncM(async p => {
+		let i = 0
+		while (p.isAlive() && i <= n) {
+			await AsyncM.timeout(dt).run(p)
+			f(i++)
+		}
+	})
 }
 
 
