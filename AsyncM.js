@@ -264,7 +264,7 @@ class MVar {
 	}
 
 	// a -> AsyncM ()
-	putAsync = x => new AsyncM(p => new Promise((k, r) => {
+	put = x => new AsyncM(p => new Promise((k, r) => {
 		if (! this.isEmpty) { 
 			let k1 = _ => {
 				p.removeCanceller(c1);
@@ -297,7 +297,7 @@ class MVar {
 	}
 
 	// AsyncM a
-	takeAsync = new AsyncM(p => new Promise((k, r) => { 
+	take = new AsyncM(p => new Promise((k, r) => { 
 		if (this.isEmpty) { 
 			let k1 = _ => {
 				p.removeCanceller(c1)	
@@ -358,13 +358,13 @@ class MChannel {
 		let ret
 
 		if (this.isEmpty()) {
-			ret = await this.m.takeAsync.run(p)
+			ret = await this.m.take.run(p)
 		}
 		else {
 			ret = this.data.shift();
 			
 			if (!this.m.isEmpty) { // has pending data or writers
-				let x = await this.m.takeAsync.run(p)
+				let x = await this.m.take.run(p)
 				this.data.push(x)
 			}
 			else {
@@ -377,7 +377,7 @@ class MChannel {
 	writeAsync = x => new AsyncM(async p => {
 		if (this.isFull() || 
 			this.m.pending.length > 0) {  // has pending readers
-			await this.m.putAsync(x).run(p)
+			await this.m.put(x).run(p)
 		}
 		else {
 			this.n = this.n + 1;
