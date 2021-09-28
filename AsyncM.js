@@ -38,8 +38,9 @@ class Progress {
 	cancel () { 
 		if (! this.cancelled) { 
 			this.cancelled = true; 
-			// TODO: The thread cancellation is blocking like what Haskell does now
-			this.cancellers.forEach(c => c()); // setTimeout(c, 0)); 
+			// TODO: the thread cancellation is blocking like how Haskell cancels.
+			//       could put c in the microtask queue so that it is nonblocking.
+			this.cancellers.forEach(c => c());  
 			this.children.forEach(c => c.cancel());
 
 			this.cancellers = [];
@@ -112,7 +113,6 @@ class AsyncM {
 	// return an AsyncM of AsyncM to wait for the result of 'this'
 	// AsyncM a -> _ -> AsyncM (AsyncM a)
 	spawn = _ => new AsyncM (async p => new AsyncM(_ => this._run(p)));
-
 
 	// fork 'this' as a thread and return its progress 
 	fork = _ => new AsyncM (async p => {
